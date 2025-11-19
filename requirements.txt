@@ -1,0 +1,13 @@
+﻿torch
+transformers
+datasets
+tqdm
+pandas
+safetensors
+numpy
+evaluate
+jiwer
+accelerate
+torchaudio
+rouge_score
+sacrebleu
