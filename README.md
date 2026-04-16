@@ -1,8 +1,6 @@
 # MonoASR
 
-**MonoASR** is a frugal and unified multilingual automatic speech recognition (ASR) model that eliminates the need for language-specific adapters by leveraging a shared Universal Language Projection (ULP) module, guided by a learnable language token. This design makes the model lightweight, adaptable, and efficient.
-
-Additionally, this approach enhances training stability and simplifies the integration of new languages without requiring full retraining, making it ideal for scalable multilingual ASR systems.
+**MonoASR** is a frugal and unified multilingual automatic speech recognition (ASR) model designed to efficiently support multiple languages within a single architecture, offering a lightweight and adaptable solution that reduces the complexity typically associated with multilingual systems while improving scalability; furthermore, it enhances training stability and enables the integration of new languages without requiring substantial architectural modifications or full retraining, making it particularly suitable for scalable multilingual ASR applications.
 
 ## 🧪 Training Strategies
 
