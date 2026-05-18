@@ -4,10 +4,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-
 from transformers import Wav2Vec2ForCTC, AutoProcessor
-from datasets import load_dataset, Audio
+from datasets import load_dataset, Audio, DatasetDict
 from tqdm import tqdm
+import time
 
 torch.cuda.empty_cache()
 
@@ -15,16 +15,16 @@ class CFG:
     epochs = 100
     batch_size = 4
     gradient_accumulation_steps = 8
-    num_workers = 2   
+    num_workers = 0   
     lr = 1e-3
-    base_model_name = ""
     """
     We used datasets and a processor that we created and uploaded to our Hugging Face Hub. 
     The processor unifies the vocabularies from multiple datasets, and the datasets themselves are the same as those described in the paper, with only minor adjustments 
     (e.g., column names, shuffling) made to facilitate code implementation.
     """
     processor_name = ""
-    french_dataset_name = ""
+    wolof_dataset_name = ""
+    base_model_name = ""
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     language_tokens = 10
     #patience = 15
@@ -179,7 +179,7 @@ class LanguageProjectionModule(nn.Module):
         self.lpm_dim= lpm_dim
         self.n_heads = n_heads
         self.multiple_of = multiple_of
-        self.languages = ["kabyle", "arabic", "french"]
+        self.languages = ["kabyle", "arabic", "french", "wolof", "yoruba"]
 
         self.resample_tokens = nn.ParameterDict()
         self.encoder_proj1 = nn.ModuleDict()
@@ -241,23 +241,9 @@ class LanguageProjectionModule(nn.Module):
 def ForCTCLoss(
     logits, labels, input_lengths, label_lengths, blank_token_id: int, reduction: str = "mean"
 ):
-    """
-    Calcule la CTC Loss pour aligner avec `outputs.loss` de `Wav2Vec2ForCTC`.
-
-    Args:
-    - logits : Tensor des prédictions du modèle (batch, seq_len, vocab_size)
-    - labels : Tensor des tokens cibles (batch, label_seq_len)
-    - input_lengths : Longueurs réelles des séquences d'entrée (batch,)
-    - label_lengths : Longueurs réelles des séquences de labels (batch,)
-    - blank_token_id : ID du token utilisé comme "blank" pour CTC
-    - reduction : Type de réduction ("mean" ou "sum")
-
-    Returns:
-    - loss : Valeur de la loss CTC
-    """
+    
     ctc_loss = nn.CTCLoss(blank=blank_token_id, reduction=reduction, zero_infinity=False)
 
-    # Convertir les logits en log-probabilités pour la CTC Loss
     log_probs = F.log_softmax(logits, dim=-1).transpose(0, 1)  # (seq_len, batch, vocab_size)
 
     loss = ctc_loss(log_probs, labels, input_lengths, label_lengths)
@@ -330,7 +316,7 @@ class UniWav(nn.Module):
       self.lm_head = nn.Linear(in_features=self.base_model_projection_out_features, out_features=self.vocab_size, bias=True)
 
 
-  def forward(self, audio, labels=None, language="french"):
+  def forward(self, audio, labels=None, language="wolof"):
 
       audio_features = self.base_model.wav2vec2.feature_extractor(audio["input_values"])
       audio_features = self.base_model.wav2vec2.feature_projection(audio_features.transpose(1, 2))
@@ -383,7 +369,7 @@ class Dataset(torch.utils.data.Dataset):
         self.sampling_rate = sampling_rate
 
     def __getitem__(self, index):
-        text = self.datasets[index]["sentence"]
+        text = self.datasets[index]["Text"]
         audio = self.datasets[index]["audio"]
 
         audio_processed = self.processor(audio["array"], sampling_rate=self.sampling_rate)
@@ -423,7 +409,7 @@ def collate_fn(items):
 
     return batch
 
-def build_audio_loaders(datasets, processor, batch_size=4, num_workers=2, **kwargs):
+def build_audio_loaders(datasets, processor, batch_size=4, num_workers=0, **kwargs):
     dataset = Dataset(datasets, processor)
     dataloader = torch.utils.data.DataLoader(
         dataset,
@@ -441,47 +427,53 @@ import re
 chars_to_remove_regex = '[\,\.\;\:\"\“\%\‘\”\�\(\)\_\«\»]'
 
 def remove_special_characters(batch):
-    batch["sentence"] = re.sub(chars_to_remove_regex, '', batch["sentence"]).lower()
+    batch["Text"] = re.sub(chars_to_remove_regex, '', batch["Text"]).lower()
     return batch
 
 def clean_text(batch):
-    batch["sentence"] = [re.sub(r'[\xa0\u202f]', ' ', text) for text in batch["sentence"]]
+    batch["Text"] = [re.sub(r'[\xa0\u202f\u200b]', ' ', text) for text in batch["Text"]]
     return batch
 
-def remove_newlines(batch):
-    batch["sentence"] = batch["sentence"].replace("\n", " ") 
-    return batch
-
-def load_french_dataset(subset=CFG.french_dataset_name):
+def load_wolof_dataset(subset=CFG.wolof_dataset_name, seed=42):
     dataset = load_dataset(subset, trust_remote_code=True)
+    dataset = dataset.rename_column("transcription", "Text")
     dataset = dataset.cast_column("audio", Audio(sampling_rate=16_000))
     dataset = dataset.map(remove_special_characters)
-    dataset = dataset.map(remove_newlines)
-    return dataset['train'], dataset['test']
+    return dataset['train'], dataset['dev'], dataset['test']
 
-def compute_metrics(wer_metric, bleu_metric, rouge_metric, pred_logits, labels, processor, ignore_index=-100):
+
+def compute_metrics(wer_metric, bleu_metric, rouge_metric,
+                    pred_logits, labels, processor, ignore_index=-100):
 
     pred_ids = np.argmax(pred_logits.cpu().numpy(), axis=-1)
-
     labels[labels == ignore_index] = processor.tokenizer.pad_token_id
 
-    pred_str = processor.batch_decode(pred_ids)
+    pred_str  = processor.batch_decode(pred_ids)
     label_str = processor.batch_decode(labels, group_tokens=False)
-
 
     wer = wer_metric.compute(predictions=pred_str, references=label_str)
 
-    bleu = {"bleu": 0.0}
-    if all(len(ref) > 0 for ref in label_str):
-        bleu = bleu_metric.compute(predictions=pred_str, references=[[ref] for ref in label_str])
+   
+    if all(len(ref) > 0 for ref in label_str) \
+       and all(len(pred) > 0 for pred in pred_str):
+        bleu = bleu_metric.compute(
+            predictions=pred_str,
+            references=[[ref] for ref in label_str]
+        )["bleu"]
+    else:
+        bleu = 0.0
 
+    
     rouge = {"rouge1": 0.0, "rouge2": 0.0, "rougeL": 0.0}
     if all(len(ref) > 0 for ref in label_str):
-        rouge = rouge_metric.compute(predictions=pred_str, references=label_str)
+        rouge = rouge_metric.compute(
+            predictions=pred_str,
+            references=label_str
+        )
 
     return {
-        "wer": wer,
-        "bleu": bleu["bleu"],
+        "wer":   wer,
+        "bleu":  bleu,
         "rouge": rouge
     }
 
@@ -510,7 +502,7 @@ def get_lr(optimizer):
     for param_group in optimizer.param_groups:
         return param_group["lr"]
 
-def train_epoch(model, train_loader, optimizer, lr_scheduler, step, gradient_accumulation_steps: int = 8, language="french"):
+def train_epoch(model, train_loader, optimizer, lr_scheduler, step, gradient_accumulation_steps = CFG.gradient_accumulation_steps, language="wolof"):
     loss_meter = AvgMeter()
     # List of dictionary, each dictionary is a batch
     tqdm_object = tqdm(train_loader, total=len(train_loader))
@@ -544,8 +536,7 @@ def train_epoch(model, train_loader, optimizer, lr_scheduler, step, gradient_acc
     return loss_meter
 
 
-
-def val_epoch(model, val_loader, processor, wer_metric, bleu_metric, rouge_metric, ignore_index=-100, language="french"):
+def val_epoch(model, val_loader, processor, wer_metric, bleu_metric, rouge_metric, ignore_index=-100, language="wolof"):
     loss_meter = AvgMeter(name="Loss")
     wer_meter = AvgMeter(name="WER")
     bleu_meter = AvgMeter(name="Bleu")
@@ -562,7 +553,7 @@ def val_epoch(model, val_loader, processor, wer_metric, bleu_metric, rouge_metri
         outputs = model(audio, labels, language)
         loss = outputs["loss"]
 
-        metrics = compute_metrics(wer_metric, bleu_metric, rouge_metric, outputs["logits"], labels["input_ids"], processor, ignore_index=-100)
+        metrics = compute_metrics(wer_metric, bleu_metric, rouge_metric, outputs["logits"], labels["input_ids"], processor, ignore_index=ignore_index)
         wer = metrics["wer"]
         bleu = metrics["bleu"]
         rouge1 = metrics["rouge"]["rouge1"]
@@ -587,15 +578,66 @@ def val_epoch(model, val_loader, processor, wer_metric, bleu_metric, rouge_metri
     return loss_meter, wer_meter, bleu_meter, rouge1_meter, rouge2_meter, rougeL_meter
 
 
+def test_epoch(model, test_loader, processor, wer_metric, bleu_metric, rouge_metric, ignore_index=-100, language="wolof"):
+    loss_meter = AvgMeter(name="Test Loss")
+    wer_meter = AvgMeter(name="Test WER")
+    bleu_meter = AvgMeter(name="Test Bleu")
+    rouge1_meter = AvgMeter(name="Test Rouge1")
+    rouge2_meter = AvgMeter(name="Test Rouge2")
+    rougeL_meter = AvgMeter(name="Test RougeL")
 
-def main(train_language="french"):
+    tqdm_object = tqdm(test_loader, total=len(test_loader))
+
+    for batch in tqdm_object:
+        audio = {k: v.to(CFG.device) for k, v in batch.items() if k != "input_ids"}
+        labels = {k: v.to(CFG.device) for k, v in batch.items() if k == "input_ids"}
+
+        outputs = model(audio, labels, language)
+        loss = outputs["loss"]
+
+        metrics = compute_metrics(
+            wer_metric, bleu_metric, rouge_metric,
+            outputs["logits"], labels["input_ids"],
+            processor, ignore_index
+        )
+        wer = metrics["wer"]
+        bleu = metrics["bleu"]
+        rouge1 = metrics["rouge"]["rouge1"]
+        rouge2 = metrics["rouge"]["rouge2"]
+        rougeL = metrics["rouge"]["rougeL"]
+
+        count = audio["input_values"].size(0)
+        loss_meter.update(loss.item(), count)
+        wer_meter.update(wer, count)
+        bleu_meter.update(bleu, count)
+        rouge1_meter.update(rouge1, count)
+        rouge2_meter.update(rouge2, count)
+        rougeL_meter.update(rougeL, count)
+
+        tqdm_object.set_postfix(
+            test_loss=loss_meter.avg,
+            wer=wer_meter.avg,
+            bleu=bleu_meter.avg,
+            rouge1=rouge1_meter.avg,
+            rouge2=rouge2_meter.avg,
+            rougeL=rougeL_meter.avg
+        )
+
+    return loss_meter, wer_meter, bleu_meter, rouge1_meter, rouge2_meter, rougeL_meter
+
+
+def main(train_language="wolof"):
+
+    start_time = time.time()
+    
     # Load processor
     processor = AutoProcessor.from_pretrained(CFG.processor_name)
 
     # Load dataset
-    train_dataset, val_dataset = load_french_dataset()
+    train_dataset, val_dataset, test_dataset = load_wolof_dataset()
     train_loader =  build_audio_loaders(train_dataset, processor)
     val_loader = build_audio_loaders(val_dataset, processor)
+    test_loader = build_audio_loaders(test_dataset, processor)
 
     # Create model
     uniwav = UniWav(base_model_name=CFG.base_model_name, processor_name=CFG.processor_name)
@@ -608,7 +650,9 @@ def main(train_language="french"):
         param.requires_grad = False
     for param in uniwav.base_model.wav2vec2.encoder.parameters():
         param.requires_grad = False
-    languages = ["kabyle", "arabic"]
+
+
+    languages = ["kabyle", "arabic", "french", "yoruba"]
     for language in languages:
         for param in uniwav.language_projection_module.encoder_proj1[language].parameters():
             param.requires_grad = False
@@ -623,8 +667,8 @@ def main(train_language="french"):
     # Optimizer
     optimizer = torch.optim.AdamW(uniwav.parameters(), weight_decay=CFG.weight_decay, lr=CFG.lr)
     lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-      optimizer, mode="min", #patience=CFG.patience, 
-      factor=CFG.factor
+      optimizer, mode="min", #patience=CFG.patience,
+        factor=CFG.factor
     )
 
     # Metrics
@@ -645,7 +689,7 @@ def main(train_language="french"):
 
         # Set the model in train mode
         uniwav.train()
-        train_loss = train_epoch(uniwav, train_loader, optimizer, lr_scheduler, "epoch", gradient_accumulation_steps=CFG.gradient_accumulation_steps, language="french")
+        train_loss = train_epoch(uniwav, train_loader, optimizer, lr_scheduler, "epoch", gradient_accumulation_steps=CFG.gradient_accumulation_steps, language="wolof")
         print(f"Epoch: {epoch+1}, train loss: {train_loss}")
 
 
@@ -678,6 +722,34 @@ def main(train_language="french"):
 
     torch.save(uniwav.state_dict(), "last.pt")
 
+    uniwav.load_state_dict(torch.load("best.pt"))
+    uniwav.eval()
+    print("Evaluating on test set...")
+
+    with torch.no_grad():
+        test_loss, test_wer, test_bleu, test_rouge1, test_rouge2, test_rougeL = test_epoch(
+            uniwav,
+            test_loader,
+            processor,
+            wer_metric,
+            bleu_metric,
+            rouge_metric,
+            ignore_index=CFG.ignore_index,
+            language=train_language
+        )
+
+        print("\n=== Final Test Results ===")
+        print(f"Loss:   {test_loss.avg:.4f}")
+        print(f"WER:    {test_wer.avg:.4f}")
+        print(f"BLEU:   {test_bleu.avg:.4f}")
+        print(f"ROUGE1: {test_rouge1.avg:.4f}")
+        print(f"ROUGE2: {test_rouge2.avg:.4f}")
+        print(f"ROUGEL: {test_rougeL.avg:.4f}")
+
+    elapsed_time = time.time() - start_time
+    hours, rem = divmod(elapsed_time, 3600)
+    minutes, seconds = divmod(rem, 60)
+    print(f"\n✅ Temps total d'exécution : {int(hours)}h {int(minutes)}m {int(seconds)}s")
+
 if __name__ == "__main__":
     main()
-
