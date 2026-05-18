@@ -16,7 +16,7 @@ class CFG:
     gradient_accumulation_steps = 8
     num_workers = 2   
     lr = 1e-3
-    base_model_name = "facebook/mms-1b-all"
+    base_model_name = ""
     """
     We used datasets and a processor that we created and uploaded to our Hugging Face Hub. 
     The processor unifies the vocabularies from multiple datasets, and the datasets themselves are the same as those described in the paper, with only minor adjustments 
@@ -274,7 +274,7 @@ class UniWav(nn.Module):
                  n_heads: int = 8,
                  multiple_of: int = 256,
                  dropout_rate: float = 0.1,
-                 vocab_size: int = 118,
+                 vocab_size: int = 204,
                  ignore_index: int = -100
                  ):
 
@@ -288,7 +288,7 @@ class UniWav(nn.Module):
       n_heads: int = 8, the number of multi-heads attention to use in the Language Projection Module layers.
       multiple_of: int = 256, the dimension of projection to use in the Language Projection Module layers.
       dropout_rate: float = 0.1, the rate of the dropout layer
-      vocab_size: int = 114, the size of the vocabualary (used in lm_head layer)
+      vocab_size: int = 204, the size of the vocabualary (used in lm_head layer)
       ignore_index: int = -100, the ignore index value for loss calculation.
       """
 
