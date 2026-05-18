@@ -10,6 +10,8 @@ from tqdm import tqdm
 from itertools import zip_longest
 
 torch.cuda.empty_cache()
+#from huggingface_hub import login
+#login(token="")
 
 class CFG:
     epochs = 100
@@ -17,13 +19,15 @@ class CFG:
     gradient_accumulation_steps = 8
     num_workers = 2   
     lr = 1e-3
-    base_model_name = "facebook/mms-1b-all"
+    base_model_name = ""
     """
     We used datasets and a processor that we created and uploaded to our Hugging Face Hub. 
     The processor unifies the vocabularies from multiple datasets, and the datasets themselves are the same as those described in the paper, with only minor adjustments 
     (e.g., column names, shuffling) made to facilitate code implementation.
     """
     processor_name = ""
+    yoruba_dataset_name = ""
+    wolof_dataset_name = ""
     french_dataset_name = ""
     arabic_dataset_name = ""
     kabyle_dataset_name = ""
@@ -181,7 +185,7 @@ class LanguageProjectionModule(nn.Module):
         self.lpm_dim= lpm_dim
         self.n_heads = n_heads
         self.multiple_of = multiple_of
-        self.languages = ["kabyle", "arabic", "french"]
+        self.languages = ["kabyle", "arabic", "french", "wolof", "yoruba"]
 
         self.resample_tokens = nn.ParameterDict()
         self.encoder_proj1 = nn.ModuleDict()
@@ -277,7 +281,7 @@ class UniWav(nn.Module):
                  n_heads: int = 8,
                  multiple_of: int = 256,
                  dropout_rate: float = 0.1,
-                 vocab_size: int = 118, 
+                 vocab_size: int = 204, 
                  ignore_index: int = -100
                  ):
 
@@ -291,7 +295,7 @@ class UniWav(nn.Module):
       n_heads: int = 8, the number of multi-heads attention to use in the Language Projection Module layers.
       multiple_of: int = 256, the dimension of projection to use in the Language Projection Module layers.
       dropout_rate: float = 0.1, the rate of the dropout layer
-      vocab_size: int = 118, the size of the vocabualary (used in lm_head layer)
+      vocab_size: int = 204, the size of the vocabualary (used in lm_head layer)
       ignore_index: int = -100, the ignore index value for loss calculation.
       """
 
@@ -331,7 +335,7 @@ class UniWav(nn.Module):
       self.lm_head = nn.Linear(in_features=self.base_model_projection_out_features, out_features=self.vocab_size, bias=True)
 
 
-  def forward(self, audio, labels=None, language="french"):
+  def forward(self, audio, labels=None, language=""):
 
       audio_features = self.base_model.wav2vec2.feature_extractor(audio["input_values"])
       audio_features = self.base_model.wav2vec2.feature_projection(audio_features.transpose(1, 2))
@@ -468,7 +472,7 @@ def clean_text_kabyle(batch):
     return batch
 
 def load_kabyle_dataset(subset=CFG.kabyle_dataset_name):
-    dataset = load_dataset(subset, trust_remote_code=True, split={"train": "train[:3365]", "test": "test[:1443]"})
+    dataset = load_dataset(subset, trust_remote_code=True)
     dataset = dataset.cast_column("audio", Audio(sampling_rate=16_000))
     dataset = dataset.map(remove_special_characters_kabyle)
     dataset = dataset.map(clean_text_kabyle, batched=True)
@@ -481,11 +485,28 @@ def remove_newlines(batch):
     return batch
 
 def load_french_dataset(subset=CFG.french_dataset_name):
-    dataset = load_dataset(subset, trust_remote_code=True, split={"train": "train[:3365]", "test": "test[:1443]"})
+    dataset = load_dataset(subset, trust_remote_code=True)
     dataset = dataset.cast_column("audio", Audio(sampling_rate=16_000))
     dataset = dataset.map(remove_special_characters)
     dataset = dataset.map(remove_newlines)
     return dataset['train'], dataset['test']
+
+##Dataset wolof
+
+def load_wolof_dataset(subset=CFG.wolof_dataset_name):
+    dataset = load_dataset(subset, trust_remote_code=True)
+    dataset = dataset.cast_column("audio", Audio(sampling_rate=16_000))
+    dataset = dataset.map(remove_special_characters)
+    return dataset['train'], dataset['test']
+
+##Dataset yoruba
+
+def load_yoruba_dataset(subset=CFG.yoruba_dataset_name):
+    dataset = load_dataset(subset, trust_remote_code=True)
+    dataset = dataset.cast_column("audio", Audio(sampling_rate=16_000))
+    dataset = dataset.map(remove_special_characters)
+    return dataset['train'], dataset['test']
+
 
 def compute_metrics(wer_metric, bleu_metric, rouge_metric, pred_logits, labels, processor, ignore_index=-100):
 
@@ -539,14 +560,14 @@ def get_lr(optimizer):
         return param_group["lr"]
 
 
-def train_epoch(model, train_loader_kabyle, train_loader_arabic, train_loader_french, optimizer, lr_scheduler, step, gradient_accumulation_steps: int = 4):
+def train_epoch(model, train_loader_kabyle, train_loader_arabic, train_loader_french, train_loader_wolof, train_loader_yoruba, optimizer, lr_scheduler, step, gradient_accumulation_steps: int = 4):
     loss_meter = AvgMeter()
     optimizer.zero_grad()
 
     
-    for idx, (batch_kab, batch_arab, batch_fr) in enumerate(zip_longest(train_loader_kabyle, train_loader_arabic, train_loader_french), 1):
+    for idx, (batch_kab, batch_arab, batch_fr, batch_wol, batch_yor) in enumerate(zip_longest(train_loader_kabyle, train_loader_arabic, train_loader_french, train_loader_wolof, train_loader_yoruba), 1):
         
-        batches = [b for b in [batch_kab, batch_arab, batch_fr] if b is not None]
+        batches = [b for b in [batch_kab, batch_arab, batch_fr, batch_wol, batch_yor] if b is not None]
 
         for batch in batches:
           
@@ -557,6 +578,10 @@ def train_epoch(model, train_loader_kabyle, train_loader_arabic, train_loader_fr
                 language = "kabyle"
             elif batch is batch_arab:
                 language = "arabic"
+            elif batch is batch_wol:
+                language = "wolof"
+            elif batch is batch_yor:
+                language = "yoruba"
             else:
                 language = "french"
 
@@ -578,7 +603,7 @@ def train_epoch(model, train_loader_kabyle, train_loader_arabic, train_loader_fr
 
 
 
-def val_epoch(model, val_loader_kabyle, val_loader_arabic, val_loader_french, processor, wer_metric, bleu_metric, rouge_metric, ignore_index=-100):
+def val_epoch(model, val_loader_kabyle, val_loader_arabic, val_loader_french, val_loader_wolof, val_loader_yoruba, processor, wer_metric, bleu_metric, rouge_metric, ignore_index=-100):
     loss_meter = AvgMeter(name="Loss")
     wer_meter = AvgMeter(name="WER")
     bleu_meter = AvgMeter(name="Bleu")
@@ -586,11 +611,11 @@ def val_epoch(model, val_loader_kabyle, val_loader_arabic, val_loader_french, pr
     rouge2_meter = AvgMeter(name="Rouge2")
     rougeL_meter = AvgMeter(name="RougeL")
 
-    val_loader_combined = zip_longest(val_loader_kabyle, val_loader_arabic, val_loader_french)
-    tqdm_object = tqdm(val_loader_combined, total=max(len(val_loader_kabyle), len(val_loader_arabic), len(val_loader_french)))
+    val_loader_combined = zip_longest(val_loader_kabyle, val_loader_arabic, val_loader_french, val_loader_wolof, val_loader_yoruba)
+    tqdm_object = tqdm(val_loader_combined, total=max(len(val_loader_kabyle), len(val_loader_arabic), len(val_loader_french), len(val_loader_wolof), len(val_loader_yoruba)))
 
-    for kab_batch, arab_batch, frc_batch in tqdm_object:
-        for batch, lang in zip([kab_batch, arab_batch, frc_batch], ["kabyle", "arabic", "french"]):
+    for kab_batch, arab_batch, frc_batch, wol_batch, yor_batch in tqdm_object:
+        for batch, lang in zip([kab_batch, arab_batch, frc_batch, wol_batch, yor_batch], ["kabyle", "arabic", "french", "wolof", "yoruba"]):
             if batch is None:
                 continue
 
@@ -643,6 +668,14 @@ def main():
     train_loader_french =  build_audio_loaders(train_dataset_french, processor)
     val_loader_french = build_audio_loaders(val_dataset_french, processor)
 
+    train_dataset_wolof, val_dataset_wolof = load_wolof_dataset()
+    train_loader_wolof = build_audio_loaders(train_dataset_wolof, processor)
+    val_loader_wolof = build_audio_loaders(val_dataset_wolof, processor)
+
+    train_dataset_yoruba, val_dataset_yoruba = load_yoruba_dataset()
+    train_loader_yoruba = build_audio_loaders(train_dataset_yoruba, processor)
+    val_loader_yoruba = build_audio_loaders(val_dataset_yoruba, processor)
+
 
     # Create model
     uniwav = UniWav(base_model_name=CFG.base_model_name, processor_name=CFG.processor_name)
@@ -686,7 +719,7 @@ def main():
 
         # Set the model in train mode
         uniwav.train()
-        train_loss = train_epoch(uniwav, train_loader_kabyle, train_loader_arabic, train_loader_french, optimizer, lr_scheduler, "epoch", gradient_accumulation_steps=CFG.gradient_accumulation_steps)
+        train_loss = train_epoch(uniwav, train_loader_kabyle, train_loader_arabic, train_loader_french, train_loader_wolof, train_loader_yoruba, optimizer, lr_scheduler, "epoch", gradient_accumulation_steps=CFG.gradient_accumulation_steps)
         print(f"Epoch: {epoch+1}, train loss: {train_loss}")
 
 
@@ -697,6 +730,8 @@ def main():
                                                                      val_loader_kabyle, 
                                                                      val_loader_arabic, 
                                                                      val_loader_french,
+                                                                     val_loader_wolof,
+                                                                     val_loader_yoruba,
                                                                      processor,
                                                                      wer_metric,
                                                                      bleu_metric,
