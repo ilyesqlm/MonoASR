@@ -17,6 +17,8 @@ We use publicly available speech datasets hosted on Hugging Face:
 | Kabyle   | `TutlaytAI/kabyle_asr`                                      | [View Dataset](https://huggingface.co/datasets/TutlaytAI/kabyle_asr)                  |
 | Arabic   | `Yahya-Mohamed/Arabic_Audio_Rev3_9643_2021_Dataset`         | [View Dataset](https://huggingface.co/datasets/Yahya-Mohamed/Arabic_Audio_Rev3_9643_2021_Dataset) |
 | French   | `odunola/french-audio-preprocessed`                         | [View Dataset](https://huggingface.co/datasets/odunola/french-audio-preprocessed)     |
+| Wolof    | `yigagilbert/alffa-wolof-asr-dataset-19hr`                  | [View Dataset](https://huggingface.co/datasets/yigagilbert/alffa-wolof-asr-dataset-19hr)     |
+| Yoruba   | `Hidi-agili/yoruba_tts_dataset`                             | [View Dataset](https://huggingface.co/datasets/Hidi-agili/yoruba_tts_dataset)     |
 
 These datasets are loaded using the 🤗 `datasets` library.
 
@@ -36,6 +38,8 @@ pip install -r requirements.txt
 python Monolingual_Training/Monolingual\ Baseline/baseline_kabyle.py
 python Monolingual_Training/Monolingual\ Baseline/baseline_arabic.py
 python Monolingual_Training/Monolingual\ Baseline/baseline_french.py
+python Monolingual_Training/Monolingual\ Baseline/baseline_wolof.py
+python Monolingual_Training/Monolingual\ Baseline/baseline_yoruba.py
 ```
 
 ### Monolingual Training - MonoASR
@@ -44,6 +48,8 @@ python Monolingual_Training/Monolingual\ Baseline/baseline_french.py
 python Monolingual_Training/Monolingual\ MonoASR/MonoASR_kabyle.py
 python Monolingual_Training/Monolingual\ MonoASR/MonoASR_arabic.py
 python Monolingual_Training/Monolingual\ MonoASR/MonoASR_french.py
+python Monolingual_Training/Monolingual\ MonoASR/MonoASR_wolof.py
+python Monolingual_Training/Monolingual\ MonoASR/MonoASR_yoruba.py
 ```
 
 ### Progressive Training - Baseline
@@ -52,6 +58,8 @@ python Monolingual_Training/Monolingual\ MonoASR/MonoASR_french.py
 python Progressive_Training/Progressive\ Baseline/baseline_kabyle.py
 python Progressive_Training/Progressive\ Baseline/baseline_arabic_+kabyle.py
 python Progressive_Training/Progressive\ Baseline/baseline_french_+arabic_+kabyle.py
+python Progressive_Training/Progressive\ Baseline/baseline_wolof_+french_+arabic_+kabyle.py
+python Progressive_Training/Progressive\ Baseline/baseline_yoruba_+wolof_+french_+arabic_+kabyle.py
 ```
 
 ### Progressive Training - MonoASR
@@ -60,16 +68,16 @@ python Progressive_Training/Progressive\ Baseline/baseline_french_+arabic_+kabyl
 python Progressive_Training/Progressive\ MonoASR/MonoASR_kabyle.py
 python Progressive_Training/Progressive\ MonoASR/MonoASR_arabic_+kabyle.py
 python Progressive_Training/Progressive\ MonoASR/MonoASR_french_+arabic_+kabyle.py
+python Progressive_Training/Progressive\ MonoASR/MonoASR_wolof_+french_+arabic_+kabyle.py
+python Progressive_Training/Progressive\ MonoASR/MonoASR_yoruba_+wolof_+french_+arabic_+kabyle.py
 ```
 
-### Simultaneous Training - Baseline
+### Simultaneous Training
 
 ```bash
-python Simultaneous_Training/Simultaneous_Baseline.py
-```
-
-### Simultaneous Training - MonoASR
-
-```bash
+python Simultaneous_Training/Simultaneous_MMS.py
+python Simultaneous_Training/Simultaneous_Whisper_small.py
+python Simultaneous_Training/Simultaneous_Whisper_medium.py
+python Simultaneous_Training/Simultaneous_Whisper_large.py
 python Simultaneous_Training/Simultaneous_MonoASR.py
 ```
